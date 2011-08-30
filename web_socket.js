@@ -1,7 +1,7 @@
 // Copyright: Hiroshi Ichikawa <http://gimite.net/en/>
 // License: New BSD License
 // Reference: http://dev.w3.org/html5/websockets/
-// Reference: http://tools.ietf.org/html/draft-ietf-hybi-thewebsocketprotocol-07
+// Reference: http://tools.ietf.org/html/draft-ietf-hybi-thewebsocketprotocol-12
 
 (function() {
   
@@ -38,12 +38,15 @@
    * @param {string} headers
    */
   WebSocket = function(url, protocols, proxyHost, proxyPort, headers) {
+    logger.log("using Flash WebSocket");
     var self = this;
     self.__id = WebSocket.__nextId++;
     WebSocket.__instances[self.__id] = self;
     self.readyState = WebSocket.CONNECTING;
     self.bufferedAmount = 0;
+    self.binaryType = "blob";
     self.__events = {};
+    self.__sendQueue = [];
     if (!protocols) {
       protocols = [];
     } else if (typeof protocols == "string") {
@@ -61,10 +64,13 @@
 
   /**
    * Send data to the web socket.
-   * @param {string} data  The data to send to the socket.
-   * @return {boolean}  True for success, false for failure.
+   * @param {DOMString} data    The DOMString to send to the socket.
+   * @param {ArrayBuffer} data  The ArrayBuffer to send to the socket.
+   * @param {Blob} data         The Blob to send to the socket.
+   * @return void               
    */
   WebSocket.prototype.send = function(data) {
+    var self = this;
     if (this.readyState == WebSocket.CONNECTING) {
       throw "INVALID_STATE_ERR: Web Socket connection has not been established";
     }
@@ -76,12 +82,27 @@
     // preserve all Unicode characters either e.g. "\uffff" in Firefox.
     // Note by wtritch: Hopefully this will not be necessary using ExternalInterface.  Will require
     // additional testing.
-    var result = WebSocket.__flash.send(this.__id, encodeURIComponent(data));
-    if (result < 0) { // success
-      return true;
-    } else {
-      this.bufferedAmount += result;
-      return false;
+
+    if (typeof(data) === "string") {
+      self.__sendQueue.push(data);
+      setTimeout(function(){ self.__processSendQueue(self); }, 1);
+    } else if (typeof(data) === "object") {
+      var fileReader = new FileReader();
+      if (typeof(data.byteLength) !== "undefined") {
+        // ArrayBuffer
+        fileReader.binaryType = "ArrayBuffer";
+        var bb = new WebKitBlobBuilder(); // TODO: other prefixes
+        bb.append(data);
+        data = bb.getBlob();
+      } else if (typeof(data.size) !== "undefined") {
+        // Blob
+        fileReader.binaryType = "Blob";
+      } else {
+        throw "unknown binary type for send()";
+      }
+      fileReader.onloadend = function() { self.__processSendQueue(self); };
+      fileReader.readAsBinaryString(data);
+      self.__sendQueue.push(fileReader)
     }
   };
 
@@ -146,6 +167,43 @@
   };
 
   /**
+   * Process send queue events
+   */
+  WebSocket.prototype.__processSendQueue = function(self) {
+    var obj, dtype, data;
+    logger.log("processSendQueue, queue length: " + self.__sendQueue.length);
+    while (self.__sendQueue.length > 0) {
+      obj = self.__sendQueue[0];
+      if (typeof(obj) === "string") {
+        // String
+        //logger.log("sending string: " + obj);
+        dtype = "s";
+        data = obj;
+      } else {
+        if (obj.readyState !== FileReader.DONE) {
+          logger.log("FileReader object on send queue is not ready");
+          break;
+        } else if (obj.result === null) {
+          throw "A send queue FileReader fatal error occured";
+        }
+        data = obj.result;
+        if (obj.binaryType === "arraybuffer") {
+          // ArrayBuffer
+          logger.log("sending arrayBuffer: " + data);
+          dtype = "a";
+        } else if (obj.binaryType === "blob") {
+          // Blob
+          logger.log("sending blob: " + data);
+          dtype = "b";
+        }
+      }
+      self.__sendQueue.shift();
+      WebSocket.__flash.send(self.__id, dtype, encodeURIComponent(data));
+    }
+
+  }
+
+  /**
    * Handles an event from Flash.
    * @param {Object} flashEvent
    */
@@ -165,6 +223,19 @@
       jsEvent = this.__createSimpleEvent("close");
     } else if (flashEvent.type == "message") {
       var data = decodeURIComponent(flashEvent.message);
+      if (flashEvent.binary) {
+        if (this.binaryType === "blob") {
+          var bb = new WebKitBlobBuilder();
+          bb.append(data);
+          data = bb.getBlob();
+        } else if (this.binaryType === "arraybuffer") {
+          var ab = new Uint8Array(data.split('').map(
+                function(chr) { return chr.charCodeAt(0); }));
+          data = ab.buffer;
+        } else {
+          throw("Invalid binaryType: " + this.binaryType);
+        }
+      }
       jsEvent = this.__createMessageEvent("message", data);
     } else {
       throw "unknown event type: " + flashEvent.type;
@@ -184,14 +255,18 @@
   };
   
   WebSocket.prototype.__createMessageEvent = function(type, data) {
-    if (document.createEvent && window.MessageEvent && !window.opera) {
-      var event = document.createEvent("MessageEvent");
-      event.initMessageEvent("message", false, false, data, null, null, window, null);
-      return event;
-    } else {
+    //if (document.createEvent && window.MessageEvent && !window.opera) {
+    //  var event = document.createEvent("MessageEvent");
+    //  console.log("here6");
+    //  console.dir(data);
+    //  event.initMessageEvent("message", false, false, data, null, null, window, null);
+    //  event.data = data;
+    //  console.dir(event.data);
+    //  return event;
+    //} else {
       // IE and Opera, the latter one truncates the data parameter after any 0x00 bytes.
       return {type: type, data: data, bubbles: false, cancelable: false};
-    }
+    //}
   };
   
   /**

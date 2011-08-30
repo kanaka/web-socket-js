@@ -1,7 +1,7 @@
 // Copyright: Hiroshi Ichikawa <http://gimite.net/en/>
 // License: New BSD License
 // Reference: http://dev.w3.org/html5/websockets/
-// Reference: http://tools.ietf.org/html/draft-ietf-hybi-thewebsocketprotocol-07
+// Reference: http://tools.ietf.org/html/draft-ietf-hybi-thewebsocketprotocol-12
 
 package net.gimite.websocket {
 
@@ -132,18 +132,27 @@ public class WebSocket extends EventDispatcher {
     return this.acceptedProtocol;
   }
   
-  public function send(encData:String):int {
+  public function send(dType:String, encData:String):int {
     var raw_str:String = decodeURIComponent(encData);
-    var data:ByteArray = new ByteArray();
-    data.writeUTFBytes(raw_str);
+    var data:ByteArray;
+    if(dType == "s") {
+      data = new ByteArray();
+      data.writeUTFBytes(raw_str);
+    } else {
+      data = stringToByteArray(raw_str);
+    }
     var plength:uint = data.length;
 
     if (readyState == OPEN) {
-      // TODO: binary API support
       var header:ByteArray = new ByteArray();
 
-      header.writeByte(0x80 | 0x01); // FIN + text opcode
+      if(dType == "s") {
+        header.writeByte(0x80 | 0x01); // FIN + text opcode
+      } else {
+        header.writeByte(0x80 | 0x02); // FIN + binary opcode
+      }
 
+      plength = data.length;
       if (plength <= 125) {
         header.writeByte(0x80 | plength); // Masked + length
       } else if (plength > 125 && plength < 65536) {
@@ -157,7 +166,7 @@ public class WebSocket extends EventDispatcher {
         fatal("Send frame size too large");
         return 0;
       }
-        
+
       // Generate a mask
       var mask:Array = new Array(4);
       for (var i:int = 0; i < 4; i++) {
@@ -179,6 +188,14 @@ public class WebSocket extends EventDispatcher {
       fatal("invalid state");
       return 0;
     }
+  }
+
+  private function stringToByteArray(s:String):ByteArray
+  {
+    var a:ByteArray = new ByteArray();
+    for (var i:int = 0; i < s.length; ++i)
+      a[i] = s.charCodeAt(i);
+    return a;
   }
 
   public function parseFrame():int {
@@ -240,6 +257,7 @@ public class WebSocket extends EventDispatcher {
       }
       socket.close();
     } catch (ex:Error) { }
+    socket.addEventListener(ProgressEvent.SOCKET_DATA, onSocketData);
     readyState = CLOSED;
     this.dispatchEvent(new WebSocketEvent(isError ? "error" : "close"));
   }
@@ -345,14 +363,20 @@ public class WebSocket extends EventDispatcher {
         }
       } else {
         if (parseFrame() == 1) {
-          var data:String = readUTFBytes(buffer, frame_hlength, frame_plength);
+          var data:String = readBytes(buffer, frame_hlength, frame_plength);
           removeBufferBefore(frame_hlength + frame_plength);
           pos = -1;
-          if (frame_opcode == 0x01 || frame_opcode == 0x02) {
-            this.dispatchEvent(new WebSocketEvent("message", encodeURIComponent(data)));
+          if (frame_opcode == 0x01) {
+            this.dispatchEvent(new WebSocketEvent("message", encodeURIComponent(data), false));
+          } else if (frame_opcode == 0x02) {
+            this.dispatchEvent(new WebSocketEvent("message", encodeURIComponent(data), true));
           } else if (frame_opcode == 0x08) {
             // TODO: extract code and reason string
             logger.log("received closing packet");
+            close();
+          } else {
+            // TODO: extract code and reason string
+            logger.log("received unknown opcode: " + frame_opcode);
             close();
           }
         }

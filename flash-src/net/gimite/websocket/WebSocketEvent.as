@@ -14,11 +14,14 @@ public class WebSocketEvent extends Event {
   public static const ERROR:String = "error";
 
   public var message:String;
+  public var binary:Boolean;
   
   public function WebSocketEvent(
-      type:String, message:String = null, bubbles:Boolean = false, cancelable:Boolean = false) {
+      type:String, message:String = null, binary:Boolean = false,
+      bubbles:Boolean = false, cancelable:Boolean = false) {
     super(type, bubbles, cancelable);
     this.message = message;
+    this.binary = binary;
   }
   
   public override function clone():Event {

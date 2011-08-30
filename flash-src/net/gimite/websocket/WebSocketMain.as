@@ -1,7 +1,7 @@
 // Copyright: Hiroshi Ichikawa <http://gimite.net/en/>
 // License: New BSD License
 // Reference: http://dev.w3.org/html5/websockets/
-// Reference: http://tools.ietf.org/html/draft-ietf-hybi-thewebsocketprotocol-07 
+// Reference: http://tools.ietf.org/html/draft-ietf-hybi-thewebsocketprotocol-12 
 
 package net.gimite.websocket {
 
@@ -71,6 +71,7 @@ public class WebSocketMain extends Sprite implements IWebSocketLogger{
     var webSocket:WebSocket = event.target as WebSocket;
     var eventObj:Object = {};
     eventObj.type = event.type;
+    eventObj.binary = event.binary;
     eventObj.webSocketId = webSocket.getId();
     eventObj.readyState = webSocket.getReadyState();
     eventObj.protocol = webSocket.getAcceptedProtocol();
@@ -98,9 +99,9 @@ public class WebSocketMain extends Sprite implements IWebSocketLogger{
     webSockets[webSocketId] = newSocket;
   }
   
-  public function send(webSocketId:int, encData:String):int {
+  public function send(webSocketId:int, dType:String, encData:String):int {
     var webSocket:WebSocket = webSockets[webSocketId];
-    return webSocket.send(encData);
+    return webSocket.send(dType, encData);
   }
   
   public function close(webSocketId:int):void {
