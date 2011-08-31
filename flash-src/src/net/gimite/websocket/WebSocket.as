@@ -291,7 +291,7 @@ public class WebSocket extends EventDispatcher {
       "Connection: Upgrade\r\n" +
       "Sec-WebSocket-Key: {2}\r\n" +
       "Sec-WebSocket-Origin: {3}\r\n" +
-      "Sec-WebSocket-Version: 7\r\n" +
+      "Sec-WebSocket-Version: 8\r\n" +
       "Cookie: {4}\r\n" +
       "{5}" +
       "\r\n",
