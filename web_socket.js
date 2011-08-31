@@ -44,9 +44,12 @@
     WebSocket.__instances[self.__id] = self;
     self.readyState = WebSocket.CONNECTING;
     self.bufferedAmount = 0;
-    self.binaryType = "blob";
+    if (typeof(window.ArrayBuffer) !== "undefined") {
+      self.binaryType = "arraybuffer";
+    } else {
+      self.binaryType = "array";
+    }
     self.__events = {};
-    self.__sendQueue = [];
     if (!protocols) {
       protocols = [];
     } else if (typeof protocols == "string") {
@@ -54,8 +57,9 @@
     }
     // Uses setTimeout() to make sure __createFlash() runs after the caller sets ws.onopen etc.
     // Otherwise, when onopen fires immediately, onopen is called before it is set.
-    setTimeout(function() {
+    self.__createTask = setTimeout(function() {
       WebSocket.__addTask(function() {
+        self.__createTask = null;
         WebSocket.__flash.create(
             self.__id, url, protocols, proxyHost || null, proxyPort || 0, headers || null);
       });
@@ -66,7 +70,7 @@
    * Send data to the web socket.
    * @param {DOMString} data    The DOMString to send to the socket.
    * @param {ArrayBuffer} data  The ArrayBuffer to send to the socket.
-   * @param {Blob} data         The Blob to send to the socket.
+   * @param {Array} data        Array of 0-255 to send to the socket.
    * @return void               
    */
   WebSocket.prototype.send = function(data) {
@@ -83,33 +87,36 @@
     // Note by wtritch: Hopefully this will not be necessary using ExternalInterface.  Will require
     // additional testing.
 
-    if (typeof(data) === "string") {
-      self.__sendQueue.push(data);
-      setTimeout(function(){ self.__processSendQueue(self); }, 1);
-    } else if (typeof(data) === "object") {
-      var fileReader = new FileReader();
-      if (typeof(data.byteLength) !== "undefined") {
-        // ArrayBuffer
-        fileReader.binaryType = "ArrayBuffer";
-        var bb = new WebKitBlobBuilder(); // TODO: other prefixes
-        bb.append(data);
-        data = bb.getBlob();
-      } else if (typeof(data.size) !== "undefined") {
-        // Blob
-        fileReader.binaryType = "Blob";
-      } else {
-        throw "unknown binary type for send()";
-      }
-      fileReader.onloadend = function() { self.__processSendQueue(self); };
-      fileReader.readAsBinaryString(data);
-      self.__sendQueue.push(fileReader)
+    if ((typeof(data) === "object") &&
+        ((typeof(data.byteLength) !== "undefined") ||
+         (typeof(data.length) !== "undefined"))) {
+      // Array or ArrayBuffer
+      dtype = "a";
+      if (typeof(data.map) === "undefined") {
+        // Convert ArrayBuffer to normal Array 
+        var u8a = new Uint8Array(data), data = [];
+        for (var i = 0; i < u8a.length; i++) {
+          data.push(u8a[i]);
+        }
+      } 
+      data = data.map(function (num) {
+          return String.fromCharCode(num); } ).join('');
+    } else {
+      dtype = "s";
     }
+    WebSocket.__flash.send(self.__id, dtype, encodeURIComponent(data));
   };
 
   /**
    * Close this web socket gracefully.
    */
   WebSocket.prototype.close = function() {
+    if (this.__createTask) {
+        clearTimeout(this.__createTask);
+        this.__createTask = null;
+        this.readyState = WebSocket.CLOSED;
+        return;
+    }
     if (this.readyState == WebSocket.CLOSED || this.readyState == WebSocket.CLOSING) {
       return;
     }
@@ -167,43 +174,6 @@
   };
 
   /**
-   * Process send queue events
-   */
-  WebSocket.prototype.__processSendQueue = function(self) {
-    var obj, dtype, data;
-    logger.log("processSendQueue, queue length: " + self.__sendQueue.length);
-    while (self.__sendQueue.length > 0) {
-      obj = self.__sendQueue[0];
-      if (typeof(obj) === "string") {
-        // String
-        //logger.log("sending string: " + obj);
-        dtype = "s";
-        data = obj;
-      } else {
-        if (obj.readyState !== FileReader.DONE) {
-          logger.log("FileReader object on send queue is not ready");
-          break;
-        } else if (obj.result === null) {
-          throw "A send queue FileReader fatal error occured";
-        }
-        data = obj.result;
-        if (obj.binaryType === "arraybuffer") {
-          // ArrayBuffer
-          logger.log("sending arrayBuffer: " + data);
-          dtype = "a";
-        } else if (obj.binaryType === "blob") {
-          // Blob
-          logger.log("sending blob: " + data);
-          dtype = "b";
-        }
-      }
-      self.__sendQueue.shift();
-      WebSocket.__flash.send(self.__id, dtype, encodeURIComponent(data));
-    }
-
-  }
-
-  /**
    * Handles an event from Flash.
    * @param {Object} flashEvent
    */
@@ -224,14 +194,15 @@
     } else if (flashEvent.type == "message") {
       var data = decodeURIComponent(flashEvent.message);
       if (flashEvent.binary) {
-        if (this.binaryType === "blob") {
-          var bb = new WebKitBlobBuilder();
-          bb.append(data);
-          data = bb.getBlob();
-        } else if (this.binaryType === "arraybuffer") {
+        if (this.binaryType === "arraybuffer") {
           var ab = new Uint8Array(data.split('').map(
                 function(chr) { return chr.charCodeAt(0); }));
           data = ab.buffer;
+        } else if (this.binaryType === "array") {
+          data = data.split('').map(
+                function(chr) { return chr.charCodeAt(0); });
+        } else if (this.binaryType === "blob") {
+          throw("Blob binaryType not supported");
         } else {
           throw("Invalid binaryType: " + this.binaryType);
         }
